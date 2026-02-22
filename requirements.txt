@@ -1,0 +1,25 @@
+# EcoScale — Real Hardware Requirements
+# Install order matters!
+
+# Core
+fastapi
+uvicorn
+websockets
+psutil
+numpy
+opencv-python
+
+# ONNX Runtime — CUDA (for RTX 4060)
+# This installs the GPU-enabled runtime
+onnxruntime-gpu
+
+# NVIDIA power monitoring (real wattage from your RTX 4060)
+nvidia-ml-py
+
+# Model download helper
+requests
+
+# Optional: AMD Ryzen AI NPU support
+# Uncomment if you have installed the Ryzen AI SDK from:
+# https://ryzenai.docs.amd.com/en/latest/inst.html
+onnxruntime-vitisai
