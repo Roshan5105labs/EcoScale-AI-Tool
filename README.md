@@ -108,12 +108,4 @@ The video feed stays continuous with no black frame — the switch happens mid-s
 
 ---
 
-## Troubleshooting
 
-| Problem | Fix |
-|---|---|
-| `CUDAExecutionProvider not available` | Install CUDA 12.x + `pip install onnxruntime-gpu` |
-| `No module named pynvml` | `pip install nvidia-ml-py` |
-| Wattage shows "Estimated" | pynvml not installed or NVML driver issue — run `nvidia-smi` to check |
-| Camera not opening | Change `cv2.VideoCapture(0)` index to 1 or 2 in backend |
-| Model file missing | Run `python download_models.py` |
