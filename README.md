@@ -1,6 +1,6 @@
 # ⚡ EcoScale: Context-Aware AI Workload Manager
 
-**EcoScale v3 (AI Policy Edition)** is an intelligent, on-device AI orchestration system designed specifically for the AMD Ryzen AI ecosystem. 
+**EcoScale ** is an intelligent, on-device AI orchestration system designed specifically for the AMD Ryzen AI ecosystem. 
 
 By continuously polling real-time hardware telemetry, EcoScale uses a trained machine learning policy model to seamlessly migrate active AI inference sessions between the GPU, CPU, and NPU. 
 
