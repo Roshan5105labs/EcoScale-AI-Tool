@@ -2,8 +2,6 @@
 EcoScale — Model Setup
 Downloads real ONNX models used for GPU and NPU/CPU inference.
 
-Run this ONCE before starting the backend:
-    python download_models.py
 """
 
 import os
@@ -37,7 +35,6 @@ def progress_bar(block_num, block_size, total_size):
 
 
 def export_yolov8_to_onnx():
-    """Use ultralytics to export YOLOv8n to ONNX with dynamic axes."""
     out_path = os.path.join(MODELS_DIR, "yolov8n.onnx")
     if os.path.exists(out_path):
         print(f"  [✓] yolov8n.onnx already exists, skipping.")
@@ -51,7 +48,7 @@ def export_yolov8_to_onnx():
         from ultralytics import YOLO
 
     print("  Downloading YOLOv8n weights and exporting to ONNX...")
-    model = YOLO("yolov8n.pt")  # downloads ~6MB weights
+    model = YOLO("yolov8n.pt") 
     model.export(format="onnx", imgsz=640, dynamic=False, simplify=True)
 
     # ultralytics saves next to the .pt file — move it

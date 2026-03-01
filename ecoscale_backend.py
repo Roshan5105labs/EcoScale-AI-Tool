@@ -1,26 +1,6 @@
 """
-EcoScale Backend — v3 (AI Policy Edition)
-==========================================
-What is new in v3:
-  1. TelemetryCollector  — reads REAL drain rate, CPU temp, GPU temp every 500ms
-                           and logs every reading to telemetry_log.csv for proof
-  2. PolicyModel         — trained on YOUR real collected telemetry + synthetic
-                           scenarios. Replaces the if/else rule entirely.
-  3. PolicyDecider       — replaces on_power_change() with model.predict()
-  4. SimulationInjector  — injects fake signal overrides for demo scenarios
-                           without touching real hardware
-  5. All signals exposed — every input the model uses is sent to the dashboard
+EcoScale Backend
 
-Install additions:
-    pip install scikit-learn wmi joblib
-    (wmi is Windows-only — reads real CPU temperature from hardware sensors)
-
-Run order:
-    python download_models.py       # one-time
-    python ecoscale_backend.py      # starts server + begins telemetry collection
-    POST /policy/collect?seconds=120  # collect 2 min of real data per profile
-    POST /policy/train              # train model on collected data
-    GET  /policy/status             # verify model is active
 """
 
 import asyncio
@@ -44,7 +24,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-# ─── NVIDIA Power (pynvml) ───────────────────────────────────────
+# NVIDIA Power (pynvml) 
 try:
     import pynvml
     pynvml.nvmlInit()
@@ -59,7 +39,7 @@ except Exception as _e:
     GPU_NAME       = "NVIDIA GPU (pynvml unavailable)"
     print(f"[EcoScale] pynvml unavailable: {_e}")
 
-# ─── WMI for real CPU temperature (Windows) ──────────────────────
+# WMI for real CPU temperature (Windows) 
 try:
     import wmi
     _wmi = wmi.WMI(namespace="root\\OpenHardwareMonitor")
@@ -76,7 +56,7 @@ except Exception:
         _wmi          = None
         print(f"[EcoScale] WMI unavailable: {_e2} — CPU temp will use psutil fallback")
 
-# ─── scikit-learn for policy model ──────────────────────────────
+# scikit-learn for policy model 
 try:
     from sklearn.tree import DecisionTreeClassifier, export_text
     from sklearn.preprocessing import StandardScaler
@@ -90,14 +70,14 @@ except ImportError:
     SKLEARN_AVAILABLE = False
     print("[EcoScale] scikit-learn not found — pip install scikit-learn joblib")
 
-# ─── ONNX Providers ──────────────────────────────────────────────
+#  ONNX Providers 
 _avail         = ort.get_available_providers()
 CUDA_AVAILABLE = "CUDAExecutionProvider" in _avail
 NPU_AVAILABLE  = "VitisAIExecutionProvider" in _avail
 print(f"[EcoScale] CUDA provider  : {'✓' if CUDA_AVAILABLE else '✗'}")
 print(f"[EcoScale] VitisAI NPU    : {'✓' if NPU_AVAILABLE else '✗'}")
 
-# ─── Paths ───────────────────────────────────────────────────────
+#  Paths
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR      = os.path.join(BASE_DIR, "models")
 YOLO_PATH       = os.path.join(MODELS_DIR, "yolov8n.onnx")
@@ -106,7 +86,7 @@ BENCH_FILE      = os.path.join(BASE_DIR, "benchmark_results.json")
 TELEMETRY_FILE  = os.path.join(BASE_DIR, "telemetry_log.csv")
 POLICY_FILE     = os.path.join(BASE_DIR, "policy_model.joblib")
 
-CO2_GRAMS_PER_WH = 0.82   # India CEA 2023
+CO2_GRAMS_PER_WH = 0.82  
 
 COCO_CLASSES = [
     "person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat",
@@ -121,7 +101,7 @@ COCO_CLASSES = [
     "book","clock","vase","scissors","teddy bear","hair drier","toothbrush",
 ]
 
-# ─── Telemetry feature names (order matters — model trained on this) ─
+#  Telemetry feature names (order matters — model trained on this)
 FEATURE_NAMES = [
     "battery_pct",      # 0–100
     "drain_rate",       # % per minute, negative = draining
@@ -137,11 +117,7 @@ FEATURE_NAMES = [
 # Label: 0 = use CPU/NPU (efficient), 1 = use GPU (performance)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# STEP 1 — TELEMETRY COLLECTOR
-#   Reads ALL real hardware signals every 500ms.
-#   Writes every reading to telemetry_log.csv for proof and training.
-# ═══════════════════════════════════════════════════════════════════
+
 class TelemetryCollector:
     """
     Collects real hardware signals from Windows APIs.
@@ -153,7 +129,7 @@ class TelemetryCollector:
 
     def __init__(self):
         self._lock            = threading.Lock()
-        self._batt_history    = deque(maxlen=120)  # last 60s of readings (wider window)
+        self._batt_history    = deque(maxlen=120)  
         self._last_reading    = {}
         self._simulation_overrides: Dict[str, Any] = {}
         self._cpu_percent_init = False
@@ -167,7 +143,7 @@ class TelemetryCollector:
         # Prime psutil cpu_percent so first real call returns a value
         psutil.cpu_percent(interval=0.1)
 
-    # ── Temperature readers ────────────────────────────────────────
+    #Temperature readers 
     def _cpu_temp(self) -> float:
         """
         Read CPU temperature on Windows using 3 fallback methods.
@@ -203,7 +179,6 @@ class TelemetryCollector:
         return 50.0
 
     def _gpu_temp(self) -> float:
-        """Read real GPU temperature from NVML."""
         if not NVML_AVAILABLE or _gpu_handle is None:
             return -1.0
         try:
@@ -214,7 +189,6 @@ class TelemetryCollector:
             return -1.0
 
     def _gpu_wattage(self) -> float:
-        """Read real GPU wattage from NVML."""
         if not NVML_AVAILABLE or _gpu_handle is None:
             return -1.0
         try:
@@ -222,7 +196,7 @@ class TelemetryCollector:
         except Exception:
             return -1.0
 
-    # ── Drain rate calculation ─────────────────────────────────────
+    # Drain rate calculation
     def _drain_rate(self, current_pct: float, plugged: bool) -> float:
         """
         Calculate battery drain rate in % per minute.
@@ -241,11 +215,9 @@ class TelemetryCollector:
             if batt and batt.secsleft not in (psutil.POWER_TIME_UNLIMITED,
                                                psutil.POWER_TIME_UNKNOWN, -1, -2):
                 if not plugged and batt.secsleft > 0:
-                    # Draining: calculate %/min from time left
                     rate = -(current_pct / (batt.secsleft / 60.0))
                     return round(max(-5.0, rate), 3)
                 elif plugged and batt.secsleft > 0:
-                    # Charging: positive rate
                     remaining_to_full = 100.0 - current_pct
                     rate = remaining_to_full / (batt.secsleft / 60.0)
                     return round(min(5.0, rate), 3)
@@ -262,18 +234,15 @@ class TelemetryCollector:
 
         # Immediate estimate from plugged state (instant — always shown)
         if not plugged:
-            return -0.8   # typical laptop drain under AI load
+            return -0.8   
         elif current_pct < 99:
-            return 0.5    # typical charging rate
+            return 0.5    
         return 0.0
 
-    # ── Main reading ───────────────────────────────────────────────
+    #  Main reading 
     def read(self, fps: float = 0.0, inference_ms: float = 0.0,
              active_profile: str = "GPU") -> Dict[str, Any]:
-        """
-        Collect all signals. Returns dict with all feature values.
-        Applies simulation overrides if active.
-        """
+     
         batt   = psutil.sensors_battery()
         plugged    = bool(batt.power_plugged) if batt else True
         batt_pct   = round(batt.percent, 1) if batt else 100.0
@@ -281,7 +250,7 @@ class TelemetryCollector:
         gpu_temp   = self._gpu_temp()
         cpu_temp   = self._cpu_temp()
         wattage    = self._gpu_wattage()
-        cpu_usage  = psutil.cpu_percent(interval=0.1)  # interval=0.1 always returns real value
+        cpu_usage  = psutil.cpu_percent(interval=0.1) 
         hour       = datetime.now().hour
 
         # If NVML unavailable, estimate wattage from profile
@@ -300,7 +269,6 @@ class TelemetryCollector:
             "plugged"     : int(plugged),
             "cpu_usage"   : round(cpu_usage, 1),
             "hour_of_day" : hour,
-            # metadata (not features)
             "_plugged_bool": plugged,
             "_batt_pct"   : batt_pct,
             "_gpu_wattage": wattage,
@@ -332,7 +300,6 @@ class TelemetryCollector:
             return bool(self._simulation_overrides)
 
     def log_to_csv(self, reading: Dict, label: int):
-        """Write one reading to the CSV training log with ground truth label."""
         try:
             with open(TELEMETRY_FILE, "a", newline="") as f:
                 w = csv.writer(f)
@@ -352,30 +319,13 @@ class TelemetryCollector:
             return 0
         try:
             with open(TELEMETRY_FILE) as f:
-                return sum(1 for _ in f) - 1   # minus header
+                return sum(1 for _ in f) - 1  
         except Exception:
             return 0
 
 
-# ═══════════════════════════════════════════════════════════════════
-# STEP 2 — POLICY MODEL
-#   Trained on real telemetry collected from YOUR machine
-#   + synthetic scenarios covering edge cases.
-#   Label 1 = use GPU, Label 0 = use CPU/NPU
-# ═══════════════════════════════════════════════════════════════════
+
 class PolicyModel:
-    """
-    A Decision Tree trained on real hardware telemetry.
-
-    Training data sources (in priority order):
-      1. Real telemetry from telemetry_log.csv (your actual machine)
-      2. Synthetic scenarios covering edge cases not yet seen
-
-    The tree is deliberately shallow (max_depth=6) so it is:
-      - Fast (~0.001W to run)
-      - Explainable (judges can read the rules)
-      - Not overfit to synthetic data
-    """
 
     def __init__(self):
         self.model: Optional[Any]   = None
@@ -406,19 +356,14 @@ class PolicyModel:
     def is_trained(self) -> bool:
         return self.model is not None
 
-    # ── Synthetic training data ────────────────────────────────────
+    # Synthetic training data
     def _generate_synthetic(self, n: int = 2000) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Generate realistic synthetic telemetry scenarios.
-        Rules encode domain knowledge about when GPU vs CPU is optimal.
-        These are the GROUND TRUTH labels the model learns from.
-        """
         rng = np.random.RandomState(42)
         X, y = [], []
 
         for _ in range(n):
             batt_pct     = rng.uniform(5, 100)
-            drain_rate   = rng.uniform(-3.0, 0.5)   # mostly draining
+            drain_rate   = rng.uniform(-3.0, 0.5)  
             gpu_temp     = rng.uniform(35, 95)
             cpu_temp     = rng.uniform(35, 90)
             wattage      = rng.uniform(8, 50)
@@ -431,8 +376,6 @@ class PolicyModel:
             row = [batt_pct, drain_rate, gpu_temp, cpu_temp,
                    wattage, fps, inference_ms, plugged, cpu_usage, hour]
 
-            # ── Ground truth labelling rules ──
-            # These encode the intelligent decisions an expert would make
 
             label = 1   # default: use GPU
 
@@ -474,16 +417,15 @@ class PolicyModel:
 
             # High FPS requirement + plugged in — always GPU
             if fps < 15 and plugged == 1 and batt_pct > 30:
-                label = 1   # need more performance
+                label = 1 
 
             X.append(row)
             y.append(label)
 
         return np.array(X), np.array(y)
 
-    # ── Load real telemetry ────────────────────────────────────────
+    # Load real telemetry 
     def _load_real_telemetry(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load real readings from telemetry_log.csv."""
         if not os.path.exists(TELEMETRY_FILE):
             return np.array([]).reshape(0, len(FEATURE_NAMES)), np.array([])
 
@@ -504,7 +446,7 @@ class PolicyModel:
 
         return np.array(X), np.array(y)
 
-    # ── Train ──────────────────────────────────────────────────────
+    # Train 
     def train(self) -> Dict:
         if not SKLEARN_AVAILABLE:
             return {"error": "scikit-learn not installed — pip install scikit-learn joblib"}
@@ -591,7 +533,7 @@ class PolicyModel:
             "trained_at"           : result["trained_at"],
         }
 
-    # ── Predict ───────────────────────────────────────────────────
+    # Predict
     def predict(self, reading: Dict) -> Dict:
         """
         Run inference on current telemetry.
@@ -606,7 +548,7 @@ class PolicyModel:
             fps      = reading.get("fps", 30)
             hour     = reading.get("hour_of_day", 12)
 
-            key = "GPU"  # default
+            key = "GPU"  
 
             # Thermal protection
             if gpu_t > 85:
@@ -652,7 +594,7 @@ class PolicyModel:
             proba  = self.model.predict_proba(feats)[0]
             label  = int(self.model.predict(feats)[0])
 
-        # label 1 = GPU, label 0 = CPU/NPU
+
         key        = "GPU" if label == 1 else "NPU"
         confidence = float(proba[label])
 
@@ -697,10 +639,7 @@ class PolicyModel:
         return " · ".join(reasons) if reasons else f"Policy decided {decision}"
 
     def _signal_scores(self, r: Dict) -> Dict:
-        """
-        Score each signal's contribution to the decision (0–100).
-        Used by the dashboard confidence panel.
-        """
+      
         batt  = r.get("battery_pct", 100)
         drain = r.get("drain_rate", 0)
         gpu_t = r.get("gpu_temp", 50)
@@ -730,18 +669,14 @@ class PolicyModel:
         }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# STEP 3 — POLICY DECIDER
-#   Replaces on_power_change() with model.predict().
-#   Runs every tick. Only switches if decision changes.
-# ═══════════════════════════════════════════════════════════════════
+
 class PolicyDecider:
     """
     Calls policy_model.predict() on every telemetry reading.
     Switches the inference engine only when the decision changes.
     Enforces a minimum hold time to prevent rapid oscillation.
     """
-    MIN_HOLD_SECONDS = 3.0   # don't switch more often than this
+    MIN_HOLD_SECONDS = 3.0   
 
     def __init__(self, model: PolicyModel):
         self._model      = model
@@ -793,7 +728,6 @@ class PolicyDecider:
         return result
 
     def force(self, key: str, engine: "InferenceEngine"):
-        """Manual override — bypasses policy for one switch."""
         engine.set_profile(key)
         with self._lock:
             self._last_key    = key
@@ -801,7 +735,7 @@ class PolicyDecider:
         print(f"[Policy] Manual override → {key}")
 
 
-# ─── Profile definitions ─────────────────────────────────────────
+# Profile definitions 
 def build_profiles() -> Dict[str, Dict]:
     if CUDA_AVAILABLE:
         gpu_prov = [("CUDAExecutionProvider", {
@@ -846,7 +780,7 @@ def build_profiles() -> Dict[str, Dict]:
 PROFILES: Dict[str, Dict] = build_profiles()
 
 
-# ─── ONNX Session Manager ────────────────────────────────────────
+# ONNX Session Manager 
 class SessionManager:
     def __init__(self):
         self._sessions: Dict[str, ort.InferenceSession] = {}
@@ -874,7 +808,7 @@ class SessionManager:
                 self._sessions[key] = sess
 
 
-# ─── Power Monitor (lightweight — telemetry collector does the heavy work) ──
+#  Power Monitor (lightweight — telemetry collector does the heavy work)
 class PowerMonitor:
     def __init__(self):
         self._plugged: Optional[bool] = None
@@ -903,7 +837,7 @@ class PowerMonitor:
         return {"plugged": new_plugged, "battery_pct": new_pct}
 
 
-# ─── Sustainability Tracker ───────────────────────────────────────
+# Sustainability Tracker 
 class SustainabilityTracker:
     def __init__(self):
         self._start    = time.time()
@@ -948,7 +882,7 @@ class SustainabilityTracker:
         }
 
 
-# ─── Benchmark Logger ─────────────────────────────────────────────
+# Benchmark Logger
 class BenchmarkLogger:
     def __init__(self):
         self.running = False
@@ -1048,7 +982,7 @@ class BenchmarkLogger:
         return results
 
 
-# ─── Presentation Mode ────────────────────────────────────────────
+#  Presentation Mode 
 class PresentationMode:
     def __init__(self):
         self.active           = False
@@ -1088,7 +1022,7 @@ class PresentationMode:
         }
 
 
-# ─── Inference Engine ─────────────────────────────────────────────
+# Inference Engine 
 class InferenceEngine:
     def __init__(self, mgr: SessionManager):
         self._mgr       = mgr
@@ -1232,7 +1166,7 @@ class InferenceEngine:
         if self._cap: self._cap.release()
 
 
-# ─── Application Bootstrap ───────────────────────────────────────
+# Application Bootstrap 
 session_mgr = SessionManager()
 power_mon   = PowerMonitor()
 telemetry   = TelemetryCollector()
@@ -1260,7 +1194,7 @@ async def startup():
     print("[EcoScale] ✓ v3 Ready")
 
 
-# ─── REST Endpoints ──────────────────────────────────────────────
+#  REST Endpoints 
 @app.get("/health")
 def health():
     return {
@@ -1272,14 +1206,13 @@ def health():
     }
 
 
-# ── STEP 4 — Collect real telemetry per profile ──────────────────
+
 @app.post("/policy/collect")
 async def collect_telemetry(background_tasks: BackgroundTasks, seconds: int = 120):
     """
     Runs both profiles for `seconds` each, logging every reading to
     telemetry_log.csv with correct ground truth labels.
-    Use this to build real training data from YOUR machine.
-    Then call POST /policy/train.
+    Calls POST /policy/train.
     """
     if bench.running:
         return {"status":"benchmark_running"}
@@ -1332,7 +1265,7 @@ def telemetry_preview():
     return {"rows": rows, "total": telemetry.csv_row_count()}
 
 
-# ── STEP 5 — Simulate conditions ─────────────────────────────────
+
 @app.post("/simulate/conditions")
 def simulate_conditions(scenario: str = "real"):
     """
@@ -1352,7 +1285,7 @@ def simulate_conditions(scenario: str = "real"):
         "fast_drain": {
             "battery_pct" : 52.0,
             "drain_rate"  : -2.8,
-            "plugged"     : 1,          # still plugged in!
+            "plugged"     : 1,         
             "gpu_temp"    : 68.0,
         },
         "high_temp": {
@@ -1374,10 +1307,10 @@ def simulate_conditions(scenario: str = "real"):
         },
         "peak_demand": {
             "battery_pct" : 85.0,
-            "drain_rate"  : 0.1,        # charging
+            "drain_rate"  : 0.1,        
             "plugged"     : 1,
             "gpu_temp"    : 62.0,
-            "fps"         : 12.0,       # FPS too low — need GPU
+            "fps"         : 12.0,       
         },
     }
 
@@ -1448,7 +1381,7 @@ def pres_stop():
     return {"status":"stopped"}
 
 
-# ─── WebSocket Stream ────────────────────────────────────────────
+#  WebSocket Stream 
 @app.websocket("/ws/metrics")
 async def stream(ws: WebSocket):
     await ws.accept()
@@ -1460,7 +1393,7 @@ async def stream(ws: WebSocket):
             power_data = power_mon.poll()
             workload   = await loop.run_in_executor(None, engine.step)
 
-            # Collect real telemetry this tick
+            # Collect real telemetry
             reading    = telemetry.read(
                 workload["fps"], workload["inference_ms"], engine.active_key
             )
@@ -1468,7 +1401,7 @@ async def stream(ws: WebSocket):
             # Inject real wattage into workload
             workload["wattage"] = reading["wattage"]
 
-            # Run AI policy decision (STEP 3)
+            # Run AI policy decision 
             if not pres.active:
                 policy_result = decider.decide(reading, engine)
             else:
@@ -1480,11 +1413,11 @@ async def stream(ws: WebSocket):
 
             workload["cpu_pct"] = reading["cpu_usage"]
 
-            # Log this tick to CSV (label = current active profile)
+            # Log this to CSV (label = current active profile)
             label = 1 if engine.active_key == "GPU" else 0
             telemetry.log_to_csv(reading, label)
 
-            # Tick sustainability
+            #  sustainability
             sustain.tick(reading["wattage"], engine.active_key == "GPU")
 
             payload = {

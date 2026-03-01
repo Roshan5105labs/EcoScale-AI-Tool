@@ -725,13 +725,13 @@ export default function EcoScale() {
           {/* Right column — AI + controls */}
           <div style={{flex:1,display:"flex",flexDirection:"column",gap:12}}>
 
-            {/* STEP 4 — Policy panel */}
+            {/* Policy panel */}
             <PolicyPanel policy={pol} telemetry={t} policyStatus={policyStatus}/>
 
             {/* Live telemetry signals proof */}
             <TelemetryProof telemetry={t} simulating={simulating}/>
 
-            {/* STEP 5 — Simulate conditions */}
+            {/* Simulate conditions */}
             <SimulatePanel simulating={simulating} onScenario={handleScenario} addEvent={addEvent}/>
 
             {/* Training panel */}

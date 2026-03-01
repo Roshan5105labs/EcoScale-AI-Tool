@@ -13,9 +13,9 @@
 ## Step 1 — Python Environment
 
 ```bash
-# Create a clean environment
+
 python -m venv ecoscale_env
-ecoscale_env\Scripts\activate        # Windows
+ecoscale_env\Scripts\activate        
 
 pip install -r requirements.txt
 ```
@@ -24,8 +24,8 @@ pip install -r requirements.txt
 
 onnxruntime-gpu requires CUDA 12.x. Verify:
 ```bash
-nvidia-smi                           # Should show your RTX 4060
-nvcc --version                       # Should show CUDA 12.x
+nvidia-smi                           
+nvcc --version                       
 ```
 
 If CUDA is not installed:
@@ -47,8 +47,7 @@ This downloads:
 Only available on Ryzen 7040+ series with XDNA architecture.
 Check if your Ryzen 7 has NPU:
 ```bash
-# In Device Manager look for "NPU Compute Accelerators"
-# or check AMD's Ryzen AI compatible processor list
+
 ```
 
 If your chip supports it:
@@ -79,7 +78,7 @@ You should see:
 Open `EcoScale.jsx` in the Claude artifact viewer, or:
 
 ```bash
-# In a new terminal
+
 npm create vite@latest ecoscale-ui -- --template react
 cd ecoscale-ui
 cp ../EcoScale.jsx src/App.jsx
